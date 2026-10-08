@@ -160,8 +160,8 @@ def dashboard_page() -> None:
     st.divider()
     st.download_button(
         "Download Excel",
-        data=db.build_report(bdf, month, month_label, total_label, branch, f"{first:%b %Y} – {last:%b %Y}"),
-        file_name=f"{branch.replace(' ', '_')}_{pd.Timestamp(month):%b%Y}_bet_slips.xlsx",
+        data=db.build_report(data),
+        file_name=f"Cashier_Bet_Slips_{first:%b%Y}-{last:%b%Y}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
     )
