@@ -306,7 +306,8 @@ def build_report(df: pd.DataFrame) -> bytes:
     def band(ws, r, text, color=NAVY, size=12):
         for c in range(1, ncols + 1):
             ws.cell(r, c).fill = PatternFill("solid", fgColor=color)
-        ws.cell(r, 1, text).font = Font(bold=True, color="FFFFFF", size=size)
+        if text is not None:
+            ws.cell(r, 1, text).font = Font(bold=True, color="FFFFFF", size=size)
 
     def header(ws, r, first):
         for c, name in enumerate([first] + mlabels + ["Total"], start=1):
@@ -337,8 +338,23 @@ def build_report(df: pd.DataFrame) -> bytes:
             if c > 1:
                 cell.number_format = NUM
 
+    from openpyxl.formatting.rule import FormulaRule
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    RED_FONT = Font(color="C00000", bold=True)
+    LOW = 5000
+
     wb = Workbook()
     wb.remove(wb.active)
+
+    # Hidden lookup sheet that the per-game dropdown tables read from
+    data_ws = wb.create_sheet("Data")
+    data_ws.append(["Branch", "Cashier", "Game", "Month", "Bet Slips"])
+    long = df.groupby(["shop", "cashier", "game", "month"], as_index=False)["bet_slips"].sum()
+    for row in long.itertuples(index=False):
+        data_ws.append([row.shop, row.cashier, row.game, pd.Timestamp(row.month).strftime("%b %Y"), int(row.bet_slips)])
+    last_data = data_ws.max_row
+    rng = lambda col: f"Data!${col}$2:${col}${last_data}"
     for branch in sorted(df["shop"].unique()):
         bdf = df[df["shop"] == branch]
         ws = wb.create_sheet(branch[:31])
@@ -353,35 +369,90 @@ def build_report(df: pd.DataFrame) -> bytes:
         header(ws, r + 1, "Cashier")
         first_cashier_row = r + 2
         r = body(ws, first_cashier_row, cashiers)
+        last_cashier_row = r - 1
         total(ws, r, f"{branch} total", cashiers)
+        # Red: a month with some slips but fewer than 5,000 (empty months stay plain)
+        month_area = f"B{first_cashier_row}:{get_column_letter(1 + len(months))}{last_cashier_row}"
+        ws.conditional_formatting.add(
+            month_area,
+            FormulaRule(formula=[f"AND(B{first_cashier_row}>0,B{first_cashier_row}<{LOW})"], font=RED_FONT),
+        )
         r += 3
 
-        # Section 2: bet slips per game, one block per cashier
+        # Section 2 (below): per-game table driven by a cashier dropdown
+        L = get_column_letter
         band(ws, r, "Bet slips per game per cashier")
         r += 2
-        for k, cashier in enumerate(cashiers.index):
-            games = grid(bdf[bdf["cashier"] == cashier], "game")
-            games = games[games["Total"] > 0]
-            band(ws, r, cashier, color=MID, size=11)
-            header(ws, r + 1, "Game")
-            start = r + 2
-            r = body(ws, start, games)
-            total(ws, r, f"{cashier} total", games)
-            ws.row_dimensions.group(start, r, outline_level=1, hidden=False)
-            r += 2
+        sel_row = r
+        ws.cell(r, 1, "Select cashier  ▼").font = Font(bold=True, size=12)
+        ws.cell(r, 1).alignment = Alignment(vertical="center")
+        box = Side(style="medium", color="000000")
+        for c in range(2, 5):
+            ws.cell(r, c).fill = PatternFill("solid", fgColor="FFF2CC")
+            ws.cell(r, c).border = Border(top=box, bottom=box, left=box if c == 2 else None, right=box if c == 4 else None)
+        sel = ws.cell(r, 2, cashiers.index[0])
+        sel.font = Font(bold=True, size=12)
+        sel.alignment = Alignment(vertical="center")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4)
+        ws.row_dimensions[r].height = 24
+        dv = DataValidation(type="list", formula1=f"=$A${first_cashier_row}:$A${last_cashier_row}", allow_blank=False)
+        dv.error, dv.errorTitle = "Pick a cashier from the list.", "Cashier"
+        ws.add_data_validation(dv)
+        dv.add(sel.coordinate)
+        sel_ref = f"$B${sel_row}"
+        r += 2
 
-        ws.column_dimensions["A"].width = max(30, min(45, max(len(str(x)) for x in cashiers.index) + 4))
+        band(ws, r, None, color=MID, size=11)
+        ws.cell(r, 1, f"={sel_ref}").font = Font(bold=True, color="FFFFFF", size=12)
+        header_row = r + 1
+        header(ws, header_row, "Game")
+        branch_games = list(bdf.groupby("game")["bet_slips"].sum().sort_values(ascending=False).index)
+        r = header_row + 1
+        first_game_row = r
+        for k, game in enumerate(branch_games):
+            ws.cell(r, 1, game)
+            for c in range(2, ncols):
+                f = (f'=SUMIFS({rng("E")},{rng("A")},"{branch}",{rng("B")},{sel_ref},'
+                     f'{rng("C")},$A{r},{rng("D")},{L(c)}${header_row})')
+                ws.cell(r, c, f).number_format = NUM
+            tc = ws.cell(r, ncols, f"=SUM(B{r}:{L(ncols - 1)}{r})")
+            tc.number_format, tc.font = NUM, Font(bold=True)
+            if k % 2:
+                for c in range(1, ncols + 1):
+                    ws.cell(r, c).fill = PatternFill("solid", fgColor=ZEBRA)
+            r += 1
+        for c in range(1, ncols + 1):
+            cell = ws.cell(r, c, "Total" if c == 1 else f"=SUM({L(c)}{first_game_row}:{L(c)}{r - 1})")
+            cell.font = Font(bold=True)
+            cell.border = Border(top=thin, bottom=thin)
+            if c > 1:
+                cell.number_format = NUM
+
+        # Stretch the tables across a full-width screen; month columns share the space
+        name_w = max(30, min(40, max(len(str(x)) for x in cashiers.index) + 4))
+        ws.column_dimensions["A"].width = name_w
+        month_w = max(13, (230 - name_w) / (ncols - 1))
         for c in range(2, ncols + 1):
-            ws.column_dimensions[get_column_letter(c)].width = 12
-        ws.freeze_panes = "B2"
+            ws.column_dimensions[get_column_letter(c)].width = month_w
+        ws.freeze_panes = "B5"
+        ws.sheet_view.zoomScale = 100
+        for rr in range(first_cashier_row, ws.max_row + 1):
+            ws.row_dimensions[rr].height = 18
+            for c in range(2, ncols + 1):  # numbers centred under their month headers
+                cell = ws.cell(rr, c)
+                if cell.value is not None and rr != sel_row:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
         ws.sheet_view.showGridLines = False
-        ws.sheet_properties.outlinePr.summaryBelow = False
         ws.page_setup.orientation = "landscape"
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
         ws.print_title_rows = "1:1"
 
+    data_ws.sheet_state = "hidden"
+    wb.move_sheet(data_ws, offset=len(wb.sheetnames) - 1)
+    wb.active = 0
+    wb.calculation.fullCalcOnLoad = True
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
