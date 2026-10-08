@@ -10,7 +10,11 @@ import os
 import pandas as pd
 import streamlit as st
 
+import importlib
+
 import slipdb as db
+
+importlib.reload(db)  # always pick up the latest slipdb.py after a GitHub update
 
 st.set_page_config(page_title="Cashier Bet Slips", layout="wide")
 
