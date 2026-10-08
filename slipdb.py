@@ -290,8 +290,8 @@ def build_report(df: pd.DataFrame) -> bytes:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
-    NAVY, MID, LIGHT, ZEBRA = "1F3A5F", "3E6A99", "DCE6F1", "F5F8FC"
-    thin = Side(style="thin", color="9FB3C8")
+    NAVY, MID, LIGHT, ZEBRA = "000000", "000000", "E7E7E7", "F7F7F7"
+    thin = Side(style="thin", color="A6A6A6")
     months = sorted(df["month"].unique())
     mlabels = [pd.Timestamp(m).strftime("%b %Y") for m in months]
     ncols = 1 + len(months) + 1  # name + months + Total
@@ -363,10 +363,6 @@ def build_report(df: pd.DataFrame) -> bytes:
             games = grid(bdf[bdf["cashier"] == cashier], "game")
             games = games[games["Total"] > 0]
             band(ws, r, cashier, color=MID, size=11)
-            # cashier name in section 1 jumps to this block
-            link = ws.cell(first_cashier_row + k, 1)
-            link.hyperlink = f"#'{ws.title}'!A{r}"
-            link.font = Font(color="1F4E99", underline="single")
             header(ws, r + 1, "Game")
             start = r + 2
             r = body(ws, start, games)
