@@ -301,8 +301,6 @@ def build_report(df: pd.DataFrame, month, month_label: str, total_label: str, sc
     def title(ws, text, ncols):
         ws["A1"] = text
         ws["A1"].font = Font(bold=True, size=14, color=NAVY)
-        ws["A2"] = f"{total_label} covers {period}"
-        ws["A2"].font = Font(italic=True, color=GREY)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
         return 4
 
@@ -394,8 +392,8 @@ def build_report(df: pd.DataFrame, month, month_label: str, total_label: str, sc
             ws.cell(4, c).alignment = Alignment(wrap_text=True)
 
     grid_sheet(f"Per Game - {month_label}", df[df["month"] == month_ts],
-               f"Bet Slips per Game — {scope} — {month_label}")
-    grid_sheet("Per Game - Total", df, f"Bet Slips per Game — {scope} — {total_label}")
+               f"Bet Slips per Game — {scope} — {month_label} ONLY")
+    grid_sheet("Per Game - All Months", df, f"Bet Slips per Game — {scope} — ALL MONTHS ADDED TOGETHER")
 
     for sheet in wb.worksheets:
         sheet.sheet_view.showGridLines = False
