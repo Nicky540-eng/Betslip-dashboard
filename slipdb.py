@@ -60,8 +60,10 @@ uploads = sa.Table(
 def make_engine(url: str | None) -> sa.Engine:
     if not url:
         return sa.create_engine("sqlite:///local_dev.db")
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            # Pin the psycopg2 driver (SQLAlchemy 2.1 otherwise defaults to psycopg 3).
+            url = "postgresql+psycopg2://" + url[len(prefix):]
     # pool_pre_ping: Neon suspends idle computes, so stale connections are common.
     return sa.create_engine(url, pool_pre_ping=True, pool_recycle=300)
 
@@ -303,3 +305,28 @@ def build_excel(sheets: dict[str, pd.DataFrame]) -> bytes:
                     for (cell,) in ws.iter_rows(min_row=2, min_col=i, max_col=i):
                         cell.number_format = "#,##0"
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# One-time seed of the historical months bundled in seed_data/
+# ---------------------------------------------------------------------------
+def seed_from_folder(engine: sa.Engine, folder: str) -> list[str]:
+    """Load any bundled CSV whose month isn't in the database yet. Safe to run on every start."""
+    import os
+
+    loaded = []
+    if not os.path.isdir(folder):
+        return loaded
+    for name in sorted(os.listdir(folder)):
+        if not name.lower().endswith(".csv"):
+            continue
+        raw = open(os.path.join(folder, name), "rb").read()
+        md5 = md5_of(raw)
+        if find_md5(engine, md5):
+            continue
+        df, month = parse_slip_summary(raw)
+        if month_loaded(engine, month):
+            continue
+        save_slip_summary(engine, name, md5, df, month, replace=False)
+        loaded.append(f"{month:%b %Y}")
+    return loaded
