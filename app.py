@@ -127,7 +127,6 @@ def dashboard_page() -> None:
     # Month
     month = st.selectbox("Month", months, format_func=lambda m: pd.Timestamp(m).strftime("%B %Y"))
     month_label = pd.Timestamp(month).strftime("%b %Y")
-    st.caption(f"{total_label}: {first:%b %Y} – {last:%b %Y}")
     num = {month_label: st.column_config.NumberColumn(format="%d"), total_label: st.column_config.NumberColumn(format="%d")}
     names = {"shop": "Branch", "cashier": "Cashier", "game": "Game"}
 
