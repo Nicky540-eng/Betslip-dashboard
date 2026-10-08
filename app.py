@@ -31,6 +31,8 @@ def _database_url() -> str | None:
 def get_engine():
     engine = db.make_engine(_database_url())
     db.init_db(engine)
+    # First start: load the bundled Jan–Jul 2026 files into Neon (skipped once they're there).
+    db.seed_from_folder(engine, os.path.join(os.path.dirname(os.path.abspath(__file__)), "seed_data"))
     return engine
 
 
