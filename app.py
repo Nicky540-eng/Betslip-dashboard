@@ -134,7 +134,10 @@ def dashboard_page() -> None:
     # 1. Cashiers: selected month + all-months total
     keys = ["shop", "cashier"] if all_branches else ["cashier"]
     st.subheader(f"Cashiers — {branch} — {month_label}")
-    cashiers = db.month_and_total(bdf, keys, month, month_label, total_label).rename(columns=names)
+    cashiers = db.month_and_total(bdf, keys, month, month_label, total_label)
+    if all_branches:  # keep each branch together
+        cashiers = cashiers.sort_values(["shop", month_label], ascending=[True, False])
+    cashiers = cashiers.rename(columns=names)
     st.dataframe(cashiers, hide_index=True, width="stretch", column_config=num)
 
     # 2. Bet slips per game for the chosen cashier (or all cashiers)
@@ -154,13 +157,11 @@ def dashboard_page() -> None:
     games = db.month_and_total(gdf, ["game"], month, month_label, total_label).rename(columns=names)
     st.dataframe(games, hide_index=True, width="stretch", column_config=num)
 
-    # Download: cashiers + every cashier's per-game breakdown
-    per_game_all = db.month_and_total(bdf, keys + ["game"], month, month_label, total_label)
-    per_game_all = per_game_all.sort_values(keys + [month_label], ascending=[True] * len(keys) + [False]).rename(columns=names)
+    # Download
     st.divider()
     st.download_button(
         "Download Excel",
-        data=db.build_excel({"Cashiers": cashiers, "Per Game per Cashier": per_game_all}),
+        data=db.build_report(bdf, month, month_label, total_label, branch, f"{first:%b %Y} – {last:%b %Y}"),
         file_name=f"{branch.replace(' ', '_')}_{pd.Timestamp(month):%b%Y}_bet_slips.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
