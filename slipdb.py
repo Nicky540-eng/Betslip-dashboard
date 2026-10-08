@@ -283,124 +283,108 @@ def month_and_total(df: pd.DataFrame, rows: list[str], month, month_label: str, 
 
 
 # ---------------------------------------------------------------------------
-# Excel report (grouped by branch)
+# Excel report: one tab per branch, every month side by side
 # ---------------------------------------------------------------------------
-def build_report(df: pd.DataFrame, month, month_label: str, total_label: str, scope: str, period: str) -> bytes:
+def build_report(df: pd.DataFrame) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
-    NAVY, LIGHT, ZEBRA, GREY = "1F3A5F", "DCE6F1", "F5F8FC", "7F7F7F"
+    NAVY, MID, LIGHT, ZEBRA = "1F3A5F", "3E6A99", "DCE6F1", "F5F8FC"
     thin = Side(style="thin", color="9FB3C8")
-    month_ts = pd.Timestamp(month)
-    branches = sorted(df["shop"].unique())
-    games = list(df.groupby("game")["bet_slips"].sum().sort_values(ascending=False).index)
+    months = sorted(df["month"].unique())
+    mlabels = [pd.Timestamp(m).strftime("%b %Y") for m in months]
+    ncols = 1 + len(months) + 1  # name + months + Total
+    NUM = '#,##0;-#,##0;"-"'
 
-    wb = Workbook()
+    def grid(frame: pd.DataFrame, index: str) -> pd.DataFrame:
+        p = frame.pivot_table(index=index, columns="month", values="bet_slips", aggfunc="sum", fill_value=0)
+        p = p.reindex(columns=months, fill_value=0)
+        p["Total"] = p.sum(axis=1)
+        return p.sort_values("Total", ascending=False).astype(int)
 
-    def title(ws, text, ncols):
-        ws["A1"] = text
-        ws["A1"].font = Font(bold=True, size=14, color=NAVY)
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
-        return 4
-
-    def band(ws, r, text, ncols):
+    def band(ws, r, text, color=NAVY, size=12):
         for c in range(1, ncols + 1):
-            ws.cell(r, c).fill = PatternFill("solid", fgColor=NAVY)
-        ws.cell(r, 1, text).font = Font(bold=True, color="FFFFFF", size=12)
-        return r + 1
+            ws.cell(r, c).fill = PatternFill("solid", fgColor=color)
+        ws.cell(r, 1, text).font = Font(bold=True, color="FFFFFF", size=size)
 
-    def header(ws, r, cols):
-        for c, name in enumerate(cols, start=1):
+    def header(ws, r, first):
+        for c, name in enumerate([first] + mlabels + ["Total"], start=1):
             cell = ws.cell(r, c, name)
             cell.font = Font(bold=True, color=NAVY)
             cell.fill = PatternFill("solid", fgColor=LIGHT)
             cell.border = Border(bottom=thin)
-            cell.alignment = Alignment(horizontal="left" if c == 1 else "center", wrap_text=True, vertical="center")
-        return r + 1
+            cell.alignment = Alignment(horizontal="left" if c == 1 else "center")
 
-    def rows(ws, r, data):
-        for k, values in enumerate(data):
-            for c, v in enumerate(values, start=1):
-                cell = ws.cell(r, c, v)
-                if c > 1:
-                    cell.number_format = "#,##0;-#,##0;\"-\""
-                if k % 2:
-                    cell.fill = PatternFill("solid", fgColor=ZEBRA)
+    def body(ws, r, p):
+        for k, (name, vals) in enumerate(zip(p.index, p.values)):
+            ws.cell(r, 1, name)
+            for c, v in enumerate(vals, start=2):
+                cell = ws.cell(r, c, int(v))
+                cell.number_format = NUM
+            ws.cell(r, ncols).font = Font(bold=True)
+            if k % 2:
+                for c in range(1, ncols + 1):
+                    ws.cell(r, c).fill = PatternFill("solid", fgColor=ZEBRA)
             r += 1
         return r
 
-    def total(ws, r, label, values):
-        for c, v in enumerate([label] + list(values), start=1):
+    def total(ws, r, label, p):
+        for c, v in enumerate([label] + [int(x) for x in p.sum().values], start=1):
             cell = ws.cell(r, c, v)
             cell.font = Font(bold=True)
             cell.border = Border(top=thin, bottom=thin)
             if c > 1:
-                cell.number_format = "#,##0"
-        return r + 2
+                cell.number_format = NUM
 
-    def widths(ws, first, rest, n):
-        ws.column_dimensions["A"].width = first
-        for c in range(2, n + 1):
-            ws.column_dimensions[get_column_letter(c)].width = rest
+    wb = Workbook()
+    wb.remove(wb.active)
+    for branch in sorted(df["shop"].unique()):
+        bdf = df[df["shop"] == branch]
+        ws = wb.create_sheet(branch[:31])
+        cashiers = grid(bdf, "cashier")
 
-    # --- Sheet 1: cashiers -------------------------------------------------
-    ws = wb.active
-    ws.title = "Cashiers"
-    cols = ["Cashier", month_label, total_label]
-    r = title(ws, f"Cashier Bet Slips — {scope} — {month_label}", 3)
-    if len(branches) > 1:
-        r = band(ws, r, "Branch Summary", 3)
-        r = header(ws, r, ["Branch", month_label, total_label])
-        bs = month_and_total(df, ["shop"], month, month_label, total_label).sort_values("shop")
-        r = rows(ws, r, bs.values.tolist())
-        r = total(ws, r, "All branches", [bs[month_label].sum(), bs[total_label].sum()])
-    for b in branches:
-        t = month_and_total(df[df["shop"] == b], ["cashier"], month, month_label, total_label)
-        r = band(ws, r, b, 3)
-        r = header(ws, r, cols)
-        r = rows(ws, r, t.values.tolist())
-        r = total(ws, r, f"{b} total", [t[month_label].sum(), t[total_label].sum()])
-    widths(ws, 32, 18, 3)
-    ws.freeze_panes = "A4"
+        ws["A1"] = f"{branch} — Bet Slips"
+        ws["A1"].font = Font(bold=True, size=15, color=NAVY)
 
-    # --- Sheets 2 & 3: per game grids --------------------------------------
-    def grid_sheet(name, data, heading):
-        ws = wb.create_sheet(name)
-        cols = ["Cashier"] + games + ["Total"]
-        n = len(cols)
-        r = title(ws, heading, n)
-        for b in branches:
-            sub = data[data["shop"] == b]
-            if sub.empty:
-                continue
-            p = sub.pivot_table(index="cashier", columns="game", values="bet_slips", aggfunc="sum", fill_value=0)
-            p = p.reindex(columns=games, fill_value=0)
-            p["Total"] = p.sum(axis=1)
-            p = p.sort_values("Total", ascending=False)
-            r = band(ws, r, b, n)
-            r = header(ws, r, cols)
-            start = r
-            r = rows(ws, r, [[idx] + [int(v) for v in vals] for idx, vals in zip(p.index, p.values)])
-            for rr in range(start, r):  # make the Total column stand out
-                ws.cell(rr, n).font = Font(bold=True)
-                ws.cell(rr, n).fill = PatternFill("solid", fgColor=LIGHT)
-            r = total(ws, r, f"{b} total", [int(v) for v in p.sum().values])
-        widths(ws, 28, 12, n)
-        ws.freeze_panes = "B4"
-        for c in range(2, n + 1):
-            ws.cell(4, c).alignment = Alignment(wrap_text=True)
+        # Section 1: bet slips per cashier
+        r = 3
+        band(ws, r, "Bet slips per cashier")
+        header(ws, r + 1, "Cashier")
+        first_cashier_row = r + 2
+        r = body(ws, first_cashier_row, cashiers)
+        total(ws, r, f"{branch} total", cashiers)
+        r += 3
 
-    grid_sheet(f"Per Game - {month_label}", df[df["month"] == month_ts],
-               f"Bet Slips per Game — {scope} — {month_label} ONLY")
-    grid_sheet("Per Game - All Months", df, f"Bet Slips per Game — {scope} — ALL MONTHS ADDED TOGETHER")
+        # Section 2: bet slips per game, one block per cashier
+        band(ws, r, "Bet slips per game per cashier")
+        r += 2
+        for k, cashier in enumerate(cashiers.index):
+            games = grid(bdf[bdf["cashier"] == cashier], "game")
+            games = games[games["Total"] > 0]
+            band(ws, r, cashier, color=MID, size=11)
+            # cashier name in section 1 jumps to this block
+            link = ws.cell(first_cashier_row + k, 1)
+            link.hyperlink = f"#'{ws.title}'!A{r}"
+            link.font = Font(color="1F4E99", underline="single")
+            header(ws, r + 1, "Game")
+            start = r + 2
+            r = body(ws, start, games)
+            total(ws, r, f"{cashier} total", games)
+            ws.row_dimensions.group(start, r, outline_level=1, hidden=False)
+            r += 2
 
-    for sheet in wb.worksheets:
-        sheet.sheet_view.showGridLines = False
-        sheet.page_setup.orientation = "landscape"
-        sheet.page_setup.fitToWidth = 1
-        sheet.sheet_properties.pageSetUpPr.fitToPage = True
-        sheet.page_setup.fitToHeight = 0
+        ws.column_dimensions["A"].width = max(30, min(45, max(len(str(x)) for x in cashiers.index) + 4))
+        for c in range(2, ncols + 1):
+            ws.column_dimensions[get_column_letter(c)].width = 12
+        ws.freeze_panes = "B2"
+        ws.sheet_view.showGridLines = False
+        ws.sheet_properties.outlinePr.summaryBelow = False
+        ws.page_setup.orientation = "landscape"
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.print_title_rows = "1:1"
 
     buf = io.BytesIO()
     wb.save(buf)
