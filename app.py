@@ -96,6 +96,10 @@ def upload_page() -> None:
 # ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
+ALL_BRANCHES = "All branches"
+ALL_CASHIERS = "All cashiers"
+
+
 def dashboard_page() -> None:
     data = cached_slips(db.data_version(engine))
     st.title("Cashier Bet Slips")
@@ -107,47 +111,56 @@ def dashboard_page() -> None:
     first, last = pd.Timestamp(months[0]), pd.Timestamp(months[-1])
     total_label = f"Total ({len(months)} months)"
 
-    # Branch
-    branches = sorted(data["shop"].unique())
-    if st.session_state.get("branch") not in branches:
-        st.session_state["branch"] = branches[0]
-    for col, b in zip(st.columns(len(branches)), branches):
+    # Branch (or all branches)
+    options = [ALL_BRANCHES] + sorted(data["shop"].unique())
+    if st.session_state.get("branch") not in options:
+        st.session_state["branch"] = ALL_BRANCHES
+    for col, b in zip(st.columns(len(options)), options):
         if col.button(b, key=f"branch_{b}", width="stretch",
                       type="primary" if st.session_state["branch"] == b else "secondary"):
             st.session_state["branch"] = b
             st.rerun()
     branch = st.session_state["branch"]
-    bdf = data[data["shop"] == branch]
+    all_branches = branch == ALL_BRANCHES
+    bdf = data if all_branches else data[data["shop"] == branch]
 
     # Month
     month = st.selectbox("Month", months, format_func=lambda m: pd.Timestamp(m).strftime("%B %Y"))
     month_label = pd.Timestamp(month).strftime("%b %Y")
     st.caption(f"{total_label}: {first:%b %Y} – {last:%b %Y}")
-
-    # Cashiers: selected month + all-months total
-    st.subheader(f"Cashiers at {branch} — {month_label}")
-    cashiers = db.month_and_total(bdf, ["cashier"], month, month_label, total_label).rename(columns={"cashier": "Cashier"})
     num = {month_label: st.column_config.NumberColumn(format="%d"), total_label: st.column_config.NumberColumn(format="%d")}
-    table = st.dataframe(cashiers, hide_index=True, width="stretch", on_select="rerun",
-                         selection_mode="single-row", key=f"cashiers_{branch}_{month_label}", column_config=num)
+    names = {"shop": "Branch", "cashier": "Cashier", "game": "Game"}
 
-    # Per-game breakdown for the clicked cashier
-    sheets = {f"{branch} {month_label}": cashiers}
-    rows = table.selection.rows
-    if not rows:
-        st.caption("Click a cashier to see their bet slips per game.")
+    # 1. Cashiers: selected month + all-months total
+    keys = ["shop", "cashier"] if all_branches else ["cashier"]
+    st.subheader(f"Cashiers — {branch} — {month_label}")
+    cashiers = db.month_and_total(bdf, keys, month, month_label, total_label).rename(columns=names)
+    st.dataframe(cashiers, hide_index=True, width="stretch", column_config=num)
+
+    # 2. Bet slips per game for the chosen cashier (or all cashiers)
+    st.subheader(f"Bet slips per game — {month_label}")
+    if all_branches:
+        people = [ALL_CASHIERS] + [f"{c} ({b})" for b, c in zip(cashiers["Branch"], cashiers["Cashier"])]
     else:
-        cashier = cashiers["Cashier"].iloc[rows[0]]
-        st.subheader(f"{cashier} — bet slips per game")
-        games = db.month_and_total(bdf[bdf["cashier"] == cashier], ["game"], month, month_label, total_label).rename(columns={"game": "Game"})
-        st.dataframe(games, hide_index=True, width="stretch", column_config=num)
-        sheets[cashier] = games
+        people = [ALL_CASHIERS] + list(cashiers["Cashier"])
+    who = st.selectbox("Cashier", people, key=f"who_{branch}")
+    if who == ALL_CASHIERS:
+        gdf = bdf
+    else:
+        idx = people.index(who) - 1
+        gdf = bdf[bdf["cashier"] == cashiers["Cashier"].iloc[idx]]
+        if all_branches:
+            gdf = gdf[gdf["shop"] == cashiers["Branch"].iloc[idx]]
+    games = db.month_and_total(gdf, ["game"], month, month_label, total_label).rename(columns=names)
+    st.dataframe(games, hide_index=True, width="stretch", column_config=num)
 
-    # Download
+    # Download: cashiers + every cashier's per-game breakdown
+    per_game_all = db.month_and_total(bdf, keys + ["game"], month, month_label, total_label)
+    per_game_all = per_game_all.sort_values(keys + [month_label], ascending=[True] * len(keys) + [False]).rename(columns=names)
     st.divider()
     st.download_button(
         "Download Excel",
-        data=db.build_excel(sheets),
+        data=db.build_excel({"Cashiers": cashiers, "Per Game per Cashier": per_game_all}),
         file_name=f"{branch.replace(' ', '_')}_{pd.Timestamp(month):%b%Y}_bet_slips.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
